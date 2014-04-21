@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
+
+if [[ $1 == bauth:* ]]; then
+  if [[ -z $2 ]]; then
+    echo "You must specify an app name"
+    exit 1
+  else
+    APP="$2"
+
+    # Check if app exists with the same name
+    if [ ! -d "$DOKKU_ROOT/$APP" ]; then
+      echo "App $APP does not exist"
+      exit 1
+    fi
+
+  fi
+fi
+
+case "$1" in
+  bauth:set)
+    NGINX_CONF=$DOKKU_ROOT/$APP/nginx.conf
+    HTPASSWD=$DOKKU_ROOT/$APP/.htpasswd
+    USER=$3
+    PASSWORD=$4
+    PORT=$(< "$DOKKU_ROOT/$APP/PORT")
+    HOST=`cat $DOKKU_ROOT/$APP/URL | sed -e "s/^.*:\/\///"`
+    cat<<EOF > $NGINX_CONF
+upstream $APP { server 127.0.0.1:$PORT; }
+server {
+  listen      [::]:80;
+  listen      80;
+  server_name $HOST;
+  location / {
+    auth_basic "Restricted";
+    auth_basic_user_file $HTPASSWD;
+
+    proxy_pass http://$APP;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host \$http_host;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-For \$remote_addr;
+    proxy_set_header X-Forwarded-Port \$server_port;
+    proxy_set_header X-Request-Start \$msec;
+  }
+}
+EOF
+    htpasswd -c -b $HTPASSWD $USER $PASSWORD
+    pluginhook nginx-pre-reload $APP
+    sudo /etc/init.d/nginx reload
+    ;;
+
+  bauth:delete)
+    ;;
+
+  help)
+    cat && cat<<EOF
+    bauth:set <app> <user> <pass>          create basic auth user
+    bauth:delete <app>                     delete basic auth settings
+EOF
+    ;;
+
+esac
